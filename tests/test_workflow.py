@@ -53,6 +53,15 @@ class WorkflowTests(unittest.TestCase):
     def test_stale_revision_rejected(self):
         old=self.p['revision'];self.act('analyze')
         with self.assertRaises(s.UserError):s.perform(self.p['id'],'analyze',{'revision':old})
+    def test_material_change_invalidates_previous_confirmation(self):
+        self.act('analyze')
+        self.act('answers',answers=s.seed()['answers'],confirmed_by='业务负责人')
+        self.assertIn('confirmed_at',self.p)
+        self.act('material',material=s.seed()['material'],source_name='更新材料')
+        self.assertNotIn('confirmed_by',self.p)
+        self.assertNotIn('confirmed_at',self.p)
+        self.act('analyze')
+        with self.assertRaises(s.UserError):self.act('draft')
     def test_demo_cannot_masquerade_as_custom_analysis(self):
         self.act('material',material='自定义实际业务材料',source_name='测试')
         with self.assertRaises(s.UserError):self.act('analyze')

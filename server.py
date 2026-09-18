@@ -126,13 +126,13 @@ def perform(pid,action,data):
     if action=='material':
         if p['draft'] or p['versions']:raise UserError('已有协议，请在业务变更中提交新材料。')
         p['material']=text(data.get('material'),'业务材料');p['source_name']=str(data.get('source_name','手动输入'))[:150]
-        p['analysis']=None;p['answers']={};p['stage']=0;event='保存业务材料'
+        p['analysis']=None;p['answers']={};p.pop('confirmed_by',None);p.pop('confirmed_at',None);p['stage']=0;event='保存业务材料'
     elif action=='analyze':
         if p['draft']:raise UserError('已有审阅稿，请使用业务变更流程。')
         text(p['material'],'业务材料')
         if demo and p['material']!=seed()['material']:raise UserError('回放仅适用原始虚构材料，自定义材料请建立真实项目。')
         p['analysis']=seed()['analysis'] if demo else call_model('analyze',{'material':p['material'],'source_name':p['source_name']})
-        p['answers']={};p.pop('confirmed_by',None);p['stage']=1;event='整理事实并生成业务追问'
+        p['answers']={};p.pop('confirmed_by',None);p.pop('confirmed_at',None);p['stage']=1;event='整理事实并生成业务追问'
     elif action=='answers':
         if not p['analysis'] or p['draft']:raise UserError('请先分析材料；初稿后的补充请走变更流程。')
         a=data.get('answers')
@@ -173,7 +173,7 @@ def perform(pid,action,data):
                 ('模型与第三方','核实模型清单、接收方、部署地、留存及训练策略是否变化。','研发 / 法务'),
                 ('域名与联系入口','确认服务域名、客服邮箱、投诉与注销入口仍准确可用。','产品 / 客服'),
                 ('数据与商业规则','确认个人信息用途、保留期限、素材许可及积分退款规则有无调整。','产品 / 法务')]]
-        p['events'].append({'at':now(),'text':f'归档 {"模拟" if demo else ""}法务定稿 v{n}'})
+        p['events'].append({'at':now(),'text':f'归档法务定稿 v{n}'})
         with connect() as c:
             store(p,expected,c);c.execute('INSERT INTO versions VALUES(?,?,?)',(pid,n,dumps(snap)))
         return p
