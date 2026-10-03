@@ -390,7 +390,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/session':return self.send_json({'authenticated':self.authenticated(),'login_required':bool(PASSWORD)})
             if path.startswith('/api/'):
                 self.guard()
-                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.4','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
+                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.5','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
                 if path=='/api/demo':return self.send_json(seed())
                 if path=='/api/projects':
                     with connect() as c:ps=[json.loads(r[0]) for r in c.execute('SELECT payload FROM projects ORDER BY rowid')]
@@ -413,8 +413,8 @@ class Handler(SimpleHTTPRequestHandler):
                 m=re.fullmatch(r'/api/projects/([a-f0-9]+)',path)
                 if m:return self.send_json(get_project(m[1]))
                 raise UserError('接口不存在。',404)
-            public_assets={'/assets/'+n for n in ('character-sheet.png','review-scene.png','privacy-scene.png','login-scene.png','workflow-scene.png','companion-idle.webp','companion-still.png','companion-blink.gif')}
-            if path not in ('/','/index.html','/studio.js','/motion.js','/studio.css','/motion.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
+            public_assets={'/assets/'+n for n in ('character-sheet.png','review-scene.png','privacy-scene.png','login-scene.png','workflow-scene.png','companion-idle.webp','companion-still.png','companion-blink.gif','entrance-v1.mp4','entrance-start.png','entrance-poster.png')}
+            if path not in ('/','/index.html','/studio.js','/motion.js','/studio.css','/motion.css','/intro.js','/intro.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
             return super().do_GET()
         except UserError as e:self.send_json({'error':str(e),'code':e.code,'request_id':e.request_id},e.status)
         except (BrokenPipeError,ConnectionResetError):pass
