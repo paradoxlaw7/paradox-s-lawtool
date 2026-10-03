@@ -66,3 +66,36 @@
 @media(max-height:800px){.companion{padding:8px 10px 10px}.companion-stage{height:86px}.companion-image{width:91px;height:91px}.companion-halo{height:75px;width:90px;top:7px}.companion-orbit{width:104px;height:28px;top:39px}.companion-copy{margin-top:1px}.companion-top{font-size:8px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 html[data-motion=paused] *,html[data-motion=paused] *:before,html[data-motion=paused] *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+
+/* v2.4: use the viewport for the document, retaining every workflow step. */
+.app-shell{grid-template-rows:54px minmax(0,1fr) 22px}
+.workbench{grid-template-columns:210px minmax(340px,1fr) 310px}
+.workflow-rail{padding:6px 12px;min-height:42px}
+.flow-step{min-width:82px;padding:4px 2px}
+.document-tabs{height:34px;padding:0 10px;flex-shrink:0}
+.doc-head{min-height:52px;padding:7px 17px;flex-shrink:0}
+.doc-title{font-size:13px;margin-bottom:2px}
+.doc-head .btn{font-size:12px;padding:6px 10px}
+.workflow-guide{min-height:52px;padding:7px 17px;gap:10px}
+.flow-heading{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.flow-eyebrow{margin:0;font-size:9px;white-space:nowrap}
+.flow-copy strong{font-size:11px;line-height:1.5}
+.flow-help{padding:3px 0;background:none;color:#96a3ba;font-size:9px;white-space:nowrap}
+.flow-help:hover{color:var(--blue)}
+.flow-copy p{margin:5px 0 0;font-size:10px}
+.flow-copy p[hidden]{display:none}
+.flow-actions .btn{font-size:10px;padding:7px 9px}
+.review-route{margin-top:4px}
+.toolbar{min-height:34px;padding:4px 16px}
+.editor-scroll{padding:12px 12px 24px;scroll-padding:16px;background:#f5f6f9}
+.paper{width:100%;max-width:none;min-height:100%;padding:30px clamp(22px,4%,48px) 42px}
+.rich-editor{min-height:max(300px,calc(100dvh - 330px));font-size:15px;line-height:1.9}
+.editor-bottom{padding:5px 17px}
+.focus-mode .paper{max-width:1160px}
+.model-connection-status{display:flex;align-items:center;gap:10px;margin:10px 0 14px;font-size:13px}
+.model-verification-note{font-size:11px;color:#96a3b7}
+@media(min-width:1600px){.workbench{grid-template-columns:224px minmax(340px,1fr) 330px}.paper{padding:36px clamp(30px,4%,60px) 48px}}
+@media(max-width:1190px){.workbench{grid-template-columns:184px minmax(310px,1fr) 280px}.flow-step{min-width:74px;font-size:10px}.flow-heading{gap:5px}.flow-eyebrow{display:none}.editor-scroll{padding:10px 10px 20px}.paper{padding:26px 28px 36px}}
+@media(max-width:980px){.workbench{grid-template-columns:184px minmax(0,1fr)}.assistant-panel.open{top:54px;bottom:22px}}
+@media(max-width:650px){.app-shell{grid-template-rows:52px minmax(0,1fr) 22px}.workbench{grid-template-columns:minmax(0,1fr)}.workflow-rail{padding:5px 8px;min-height:38px}.flow-step{min-width:83px}.document-tabs{height:32px}.doc-head{padding:7px 10px;min-height:48px}.doc-head .btn{font-size:10px;padding:5px 7px}.workflow-guide{flex-direction:row;align-items:center;padding:7px 10px;min-height:58px;gap:7px}.flow-actions{align-self:auto}.flow-copy strong{font-size:10px}.flow-actions .btn{font-size:9px;padding:6px 7px}.toolbar{padding:4px 9px}.editor-scroll{padding:8px 6px 16px}.paper{padding:22px 18px 30px}.rich-editor{font-size:14px}.files-panel.open,.assistant-panel.open{top:52px;bottom:22px}}
+.focus-mode .workbench{grid-template-columns:minmax(0,1fr)}

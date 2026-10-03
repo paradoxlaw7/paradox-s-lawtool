@@ -390,7 +390,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/session':return self.send_json({'authenticated':self.authenticated(),'login_required':bool(PASSWORD)})
             if path.startswith('/api/'):
                 self.guard()
-                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.1','office':{'provider':'local','wps_ready':False}})
+                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.4','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
                 if path=='/api/demo':return self.send_json(seed())
                 if path=='/api/projects':
                     with connect() as c:ps=[json.loads(r[0]) for r in c.execute('SELECT payload FROM projects ORDER BY rowid')]
