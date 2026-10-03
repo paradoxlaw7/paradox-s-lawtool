@@ -1,0 +1,68 @@
+/* Calm blue glass, a single living mascot, and short interaction transitions. */
+:root{--ease-out:cubic-bezier(.2,.7,.2,1);--blue:#4163dc;--line:#e8edf5}
+.topbar{background:linear-gradient(110deg,#fff 30%,#fbfcff 100%);box-shadow:0 1px 12px #1d367204;border-bottom-color:#e8edf6}
+.brand img{filter:drop-shadow(0 2px 4px #3354c91c)}
+.files-panel{background:linear-gradient(180deg,#fbfcfe,#fafbfe 60%,#f7f9fe)}
+.center-panel{background:#f3f5f9}
+.workflow-rail{background:linear-gradient(100deg,#fff,#fdfdff);padding-top:12px;padding-bottom:12px}
+.flow-step{transition:color .18s,background .18s,transform .18s var(--ease-out)}
+.flow-step.current{background:#f1f4fe;box-shadow:inset 0 0 0 1px #e7edff}
+.flow-step.current .step-number{box-shadow:0 2px 6px #4163dc22}
+.workflow-guide{background:linear-gradient(110deg,#f8faff,#fff 85%);position:relative}
+.workflow-guide:before{content:'';position:absolute;left:0;top:22%;bottom:22%;width:2px;background:#b6c7f3;border-radius:2px}
+.flow-copy strong{color:#4b607e}.flow-copy p{color:#8896ad}
+.paper{border-color:#e7ebf3;box-shadow:0 5px 22px #253f7705;border-radius:2px}
+.doc-tab{transition:color .2s,border-color .2s,background .2s}
+.file-row{transition:background .18s,color .18s,transform .18s var(--ease-out)}
+.file-row:hover{transform:translateX(2px)}
+.file-row.active{background:linear-gradient(110deg,#edf2ff,#f1f5ff);color:#4061c1}
+.btn,.icon-button{transition:background .18s,border-color .18s,color .18s,transform .18s var(--ease-out),box-shadow .18s}
+.btn.primary{background:linear-gradient(130deg,#4c6ded,#3f5ed3);border-color:#4868df;box-shadow:0 3px 9px #4265dc12!important}
+.btn.primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 5px 12px #4265dc25!important;background:linear-gradient(130deg,#5676ee,#4666db)}
+.btn:active:not(:disabled){transform:translateY(0) scale(.985)}
+.chat-composer textarea{transition:border-color .2s,box-shadow .2s}
+.chat-composer textarea:focus{border-color:#b3c2eb;box-shadow:0 0 0 3px #eff3fd;outline:none}
+.assistant-tabs button{transition:color .18s,border-color .18s}
+.view-enter .paper,.view-enter .section-card,.view-enter .empty-state{animation:document-arrive .22s var(--ease-out) both}
+.message.assistant.reply-enter{animation:reply-arrive .2s var(--ease-out) both}
+#toast{animation:toast-arrive .22s var(--ease-out) both;background:#30466b;box-shadow:0 8px 26px #273b6a20;border:1px solid #4c638533}
+@keyframes document-arrive{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes reply-arrive{from{opacity:.6;transform:translateY(3px)}to{opacity:1;transform:none}}
+@keyframes toast-arrive{from{opacity:0;translate:0 5px}to{opacity:1;translate:0 0}}
+
+.companion{flex-shrink:0;position:relative;margin:12px 14px 15px;padding:10px 12px 14px;border-radius:14px;border:1px solid #e7edfa;background:linear-gradient(160deg,#fff 6%,#f7f9ff 55%,#f3f6fd);box-shadow:0 5px 20px #415a9704;overflow:hidden}
+.companion-top{display:flex;align-items:center;justify-content:space-between;gap:5px;font-size:9px;letter-spacing:.3px;color:#94a1b7;position:relative;z-index:2}
+.companion-top>span{white-space:nowrap;display:flex;align-items:center;gap:4px}
+.companion-dot{width:4px;height:4px;border-radius:50%;background:#9baed6;display:inline-block}
+.motion-toggle{width:24px;height:22px;padding:0;background:none;border:1px solid transparent;border-radius:5px;color:#a3adc0;font-size:10px;transition:background .18s,color .18s}
+.motion-toggle:hover:not(:disabled){color:#5570b5;background:#eaf0fd;border-color:#e5eaf5}
+.motion-toggle:disabled{opacity:.6;cursor:default}
+.companion-stage{height:133px;position:relative;display:flex;justify-content:center;align-items:center;isolation:isolate}
+.companion-image{display:block;width:135px;height:135px;object-fit:contain;position:relative;z-index:2;filter:drop-shadow(0 6px 5px #3765c80c);animation:companion-float 6s ease-in-out infinite;transform-origin:50% 75%}
+.companion-halo{width:118px;height:105px;border-radius:50%;position:absolute;top:15px;background:radial-gradient(ellipse,#e4edff99,#f0f4ff33 65%,transparent 72%);z-index:0;transition:background .4s}
+.companion-orbit{position:absolute;width:146px;height:42px;top:64px;border:1px solid #d4dff277;border-radius:50%;transform:rotate(-22deg);z-index:1}
+.companion-orbit:after{content:'';position:absolute;left:13px;top:3px;width:4px;height:4px;border-radius:50%;background:#c8d8f4;box-shadow:0 0 5px #b0c6fbaa}
+.companion-ground{position:absolute;bottom:1px;width:77px;height:7px;background:radial-gradient(ellipse,#a9bceb33,transparent 70%);z-index:0;animation:companion-shadow 6s ease-in-out infinite}
+.companion-copy{text-align:center;position:relative;z-index:2;margin-top:4px}
+.companion-copy strong{font-size:11px;font-weight:500;color:#70829e;display:block;line-height:1.7}
+.companion-copy small{font-size:9px;color:#a0adc1;display:block;line-height:1.7;margin-top:2px;overflow-wrap:anywhere}
+.companion-spark{position:absolute;font-size:13px;opacity:0;color:#d6b976;pointer-events:none;z-index:3}
+.spark-one{top:29px;left:14px}.spark-two{right:13px;top:68px;font-size:17px}
+.companion[data-state=busy] .companion-image{animation:companion-float 3.4s ease-in-out infinite}
+.companion[data-state=busy] .companion-dot{background:#6e90e5;animation:work-breathe 1.8s ease-in-out infinite}
+.companion[data-state=busy] .companion-orbit{border-color:#adc4f6a0;animation:orbit-think 4s ease-in-out infinite}
+.companion[data-state=busy] .companion-copy strong{color:#637fb2}
+.companion[data-state=complete] .companion-halo{background:radial-gradient(ellipse,#eef0d866,#edf4ff66 60%,transparent 73%)}
+.companion[data-state=complete] .companion-spark{animation:completion-spark 1.8s ease-out 2}
+.companion[data-state=complete] .spark-two{animation-delay:.24s}
+.companion[data-state=complete] .companion-dot,.companion[data-state=archived] .companion-dot{background:#9ab9ad}
+.companion[data-state=attention] .companion-dot{background:#c5aa87}
+@keyframes companion-float{0%,100%{transform:translateY(0) rotate(-.3deg)}50%{transform:translateY(-4px) rotate(.5deg)}}
+@keyframes companion-shadow{0%,100%{opacity:.6;transform:scaleX(1)}50%{opacity:.3;transform:scaleX(.85)}}
+@keyframes work-breathe{0%,100%{opacity:.5;box-shadow:0 0 0 0 #6e90e500}50%{opacity:1;box-shadow:0 0 0 3px #6e90e516}}
+@keyframes orbit-think{0%,100%{transform:rotate(-22deg);opacity:.7}50%{transform:rotate(-12deg);opacity:1}}
+@keyframes completion-spark{0%{opacity:0;transform:translateY(4px) scale(.6)}30%{opacity:.75;transform:translateY(-1px) scale(1)}100%{opacity:0;transform:translateY(-9px) scale(.75)}}
+@media(max-width:1190px){.companion{margin:10px 12px 13px;padding:8px 9px 12px}.companion-stage{height:124px}.companion-image{width:124px;height:124px}.companion-orbit{width:130px}}
+@media(max-height:800px){.companion{padding:8px 10px 10px}.companion-stage{height:86px}.companion-image{width:91px;height:91px}.companion-halo{height:75px;width:90px;top:7px}.companion-orbit{width:104px;height:28px;top:39px}.companion-copy{margin-top:1px}.companion-top{font-size:8px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+html[data-motion=paused] *,html[data-motion=paused] *:before,html[data-motion=paused] *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
