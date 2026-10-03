@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+if (-not $env:PORT) { $env:PORT = '8766' }
+$env:PYTHONUTF8 = '1'
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
 if ($pythonCommand) {
     & $pythonCommand.Source server.py

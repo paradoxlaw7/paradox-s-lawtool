@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY server.py prompts.md demo.json ./
+COPY server.py ai_gateway.py errors.py documents.py demo.json ./
 COPY public ./public
 RUN useradd --uid 10001 --create-home workspace && mkdir -p /app/data && chown -R workspace:workspace /app
 USER workspace

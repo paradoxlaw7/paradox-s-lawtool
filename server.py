@@ -8,6 +8,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from difflib import unified_diff
+import ai_gateway
+from documents import word_document
+from errors import UserError
 
 ROOT = Path(__file__).resolve().parent
 if (ROOT/'.env').exists():
@@ -18,12 +23,11 @@ DATA=Path(os.environ.get('DATA_DIR',str(ROOT/'data'))); DATA.mkdir(parents=True,
 DB=DATA/'workspace.sqlite3'
 HOST=os.environ.get('HOST','127.0.0.1'); PORT=int(os.environ.get('PORT','8765'))
 PASSWORD=os.environ.get('APP_PASSWORD',''); ORIGIN=os.environ.get('PUBLIC_ORIGIN','').rstrip('/')
-CONFIG={'api_key':os.environ.get('SILICONFLOW_API_KEY',''),'model':os.environ.get('AI_MODEL','deepseek-ai/DeepSeek-V3.2')}
+CONFIG={'api_key':os.environ.get('SILICONFLOW_API_KEY',''),'model':os.environ.get('AI_MODEL','deepseek-ai/DeepSeek-V3.2'),'format':os.environ.get('AI_RESPONSE_FORMAT','auto'),'stream':os.environ.get('AI_STREAM','true').lower()=='true'}
 API_BASE='https://api.siliconflow.cn/v1'
 SESSIONS={}; LOGIN_ATTEMPTS={}; AI_LOCK=threading.BoundedSemaphore(2)
+JOB_LOCAL=threading.local()
 
-class UserError(Exception):
-    def __init__(self,message,status=400): super().__init__(message); self.status=status
 
 def now(): return datetime.now(timezone.utc).isoformat()
 def dumps(v): return json.dumps(v,ensure_ascii=False,separators=(',',':'))
@@ -43,17 +47,24 @@ def initialize():
     with connect() as c:
         c.executescript('''PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,payload TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS imported_files(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,name TEXT NOT NULL,body BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS office_documents(project_id TEXT NOT NULL,slot TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,body BLOB NOT NULL,text_hash TEXT NOT NULL,PRIMARY KEY(project_id,slot,version));
+        CREATE TRIGGER IF NOT EXISTS immutable_office_update BEFORE UPDATE ON office_documents WHEN OLD.version>0 BEGIN SELECT RAISE(ABORT,'immutable office version'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_office_delete BEFORE DELETE ON office_documents WHEN OLD.version>0 BEGIN SELECT RAISE(ABORT,'immutable office version'); END;
+        CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,action TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT,error_code TEXT,request_id TEXT);
+        CREATE UNIQUE INDEX IF NOT EXISTS one_active_job ON jobs(project_id) WHERE status IN ('queued','running');
         CREATE TABLE IF NOT EXISTS versions(project_id TEXT NOT NULL,number INTEGER NOT NULL,snapshot TEXT NOT NULL,
           PRIMARY KEY(project_id,number),FOREIGN KEY(project_id) REFERENCES projects(id));
         CREATE TRIGGER IF NOT EXISTS immutable_versions_update BEFORE UPDATE ON versions BEGIN SELECT RAISE(ABORT,'immutable version'); END;
         CREATE TRIGGER IF NOT EXISTS immutable_versions_delete BEFORE DELETE ON versions BEGIN SELECT RAISE(ABORT,'immutable version'); END;''')
+        if 'progress' not in [r['name'] for r in c.execute('PRAGMA table_info(jobs)')]:c.execute('ALTER TABLE jobs ADD COLUMN progress TEXT')
         if not c.execute('SELECT 1 FROM projects LIMIT 1').fetchone(): create_project('星幕漫剧工作台','demo',c)
 def create_project(name,mode,conn=None):
     name=text(name,'项目名称',80)
     if mode not in ('demo','live'): raise UserError('请选择演示或真实项目。')
     p={'id':secrets.token_hex(8),'name':name,'mode':mode,'stage':0,
        'material':seed()['material'] if mode=='demo' else '', 'source_name':'虚构 PRD' if mode=='demo' else '',
-       'analysis':None,'answers':{},'draft':None,'versions':[],'reviews':[],
+       'files':[],'messages':[],'analysis':None,'answers':{},'draft':None,'versions':[],'reviews':[],
        'events':[{'at':now(),'text':'建立演示项目' if mode=='demo' else '建立真实项目'}]}
     if conn is not None: conn.execute('INSERT INTO projects(id,payload) VALUES(?,?)',(p['id'],dumps(p)))
     else:
@@ -77,53 +88,125 @@ def version(pid,n):
     if not r:raise UserError('版本不存在。',404)
     v=json.loads(r[0]);v['integrity']=doc_hash(v['draft'])==v['hash'];return v
 
+def native_document(pid,slot,number=0):
+    p=get_project(pid)
+    if number:
+        if slot not in ('service','privacy'):raise UserError('此文档没有历史定稿',404)
+        content=version(pid,number)['draft'][slot]
+    elif slot=='material':content=p['material']
+    elif slot in ('service','privacy'):
+        if not p.get('draft'):raise UserError('协议尚未生成',404)
+        content=p['draft'][slot]
+    elif re.fullmatch('file_[a-f0-9]+',slot):
+        f=next((f for f in p.get('files',[]) if f['id']==slot[5:]),None)
+        if not f:raise UserError('文件不存在',404)
+        content=f['text']
+    else:raise UserError('文档类型无效',404)
+    digest=hashlib.sha256(content.encode()).hexdigest()
+    with connect() as c:
+        row=c.execute('SELECT body,text_hash FROM office_documents WHERE project_id=? AND slot=? AND version=?',(pid,slot,number)).fetchone()
+        if row and row['text_hash']==digest:return row['body']
+        if number and row:raise UserError('原生文档与归档内容不一致',409)
+        body=word_document(content)
+        c.execute('INSERT OR REPLACE INTO office_documents VALUES(?,?,?,?,?)',(pid,slot,number,body,digest))
+    return body
+
 def validate_result(r,stage):
-    if not isinstance(r,dict):raise UserError('模型未返回有效结构，请重试。',502)
-    def rows(k,fields):
-        if not isinstance(r.get(k),list):raise UserError('模型结果缺少 '+k+'，未保存。',502)
-        for row in r[k]:
-            if not isinstance(row,dict) or any(not isinstance(row.get(f),str) for f in fields):raise UserError('模型字段不完整，未保存。',502)
-    if stage=='analyze':
-        rows('facts',['id','label','value','status','source']);rows('questions',['id','question','reason','owner','priority'])
-        ids=[q['id'] for q in r['questions']]
-        if len(ids)!=len(set(ids)) or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,40}',i) for i in ids):raise UserError('模型问题编号不合法，未保存。',502)
-    else:
-        for k in ('service','privacy'):
-            if not isinstance(r.get(k),str) or len(r[k])<200:raise UserError('模型协议输出不完整，未保存。',502)
-        rows('reviews',['clause','issue','basis','url','suggestion'])
-        if not isinstance(r.get('blockers'),list) or any(not isinstance(x,str) for x in r['blockers']):raise UserError('模型缺少待确认事项，未保存。',502)
-        if stage=='revise':rows('changes',['clause','before','after','reason','action'])
-    return r
+    return ai_gateway.validate(r,stage)
+
 def call_model(stage,payload):
-    key,model=CONFIG['api_key'],CONFIG['model']
-    if not key:raise UserError('尚未连接硅基流动，请在模型设置中填写密钥。',503)
-    if not AI_LOCK.acquire(blocking=False):raise UserError('已有两个生成任务，请稍后重试。',429)
-    try:
-        body={'model':model,'messages':[{'role':'system','content':(ROOT/'prompts.md').read_text(encoding='utf-8')},
-              {'role':'user','content':dumps({'task':stage,'project_data':payload})}], 'stream':False,'max_tokens':12000,'temperature':0.2}
-        req=urllib.request.Request(API_BASE+'/chat/completions',data=dumps(body).encode(),
-            headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='POST')
-        try:
-            with urllib.request.urlopen(req,timeout=210) as response:raw=json.loads(response.read(3_000_000))
-        except urllib.error.HTTPError as e:
-            msg={401:'密钥无效，请检查配置。',403:'当前密钥无权使用此模型。',429:'模型限流或账户额度不足，请检查控制台。',400:'模型或参数不支持，请核对完整模型名称。'}
-            raise UserError(msg.get(e.code,'模型服务暂时不可用，请稍后重试。'),502) from None
-        except (OSError,ValueError):raise UserError('模型连接超时或响应异常，未覆盖已有内容。',502) from None
-        try:
-            choice=raw['choices'][0]
-            if choice.get('finish_reason')=='length':raise UserError('输出达到长度上限，未保存不完整协议。请缩小材料范围后重试。',502)
-            content=choice['message']['content'].strip()
-            if content.startswith('```'):content=re.sub(r'\s*```$','',re.sub(r'^```(?:json)?\s*','',content))
-            result=validate_result(json.loads(content),stage)
-        except (KeyError,IndexError,TypeError,ValueError,AttributeError):raise UserError('模型未返回完整 JSON，未保存。请重试。',502) from None
-        result['provenance']={'kind':'live','provider':'硅基流动','model':model,'at':now(),'usage':raw.get('usage',{}),'source_status':'内置法律线索，需法务核验'}
-        return result
-    finally:AI_LOCK.release()
+    def progress(task,chars,elapsed):
+        jid=getattr(JOB_LOCAL,'id',None)
+        if jid:
+            with connect() as c:c.execute('UPDATE jobs SET progress=?,updated_at=? WHERE id=?',(dumps({'stage':task,'chars':chars,'seconds':round(elapsed)}),now(),jid))
+    if stage not in ('draft','revise'):
+        progress(stage,0,0)
+        return ai_gateway.generate(stage,payload,CONFIG,DATA,API_BASE,progress)
+    output={'reviews':[],'blockers':[],'changes':[],'provenance':{'kind':'live','calls':[]}}
+    for doc in ('service','privacy'):
+        progress(stage+'_'+doc,0,0)
+        context=dict(payload)
+        if stage=='revise':
+            baseline=payload['baseline']
+            context={'baseline_document':baseline['draft'][doc],'material':baseline['material'],'analysis':baseline['analysis'],'answers':baseline['answers'],'change':payload['change'],'confirmation':payload['confirmation']}
+        if doc=='privacy':context['service_document']=output['service']
+        result=ai_gateway.generate(stage+'_'+doc,context,CONFIG,DATA,API_BASE,progress)
+        output[doc]=result['document'];output['reviews']+=result['reviews'];output['blockers']+=result['blockers']
+        output['provenance']['calls'].append(result['provenance'])
+        for change in result.get('changes',[]):
+            change['document']=doc;output['changes'].append(change)
+    output['blockers']=list(dict.fromkeys(output['blockers']))
+    return validate_result(output,stage)
+
 
 def perform(pid,action,data):
     p=get_project(pid);expected=data.get('revision');demo=p['mode']=='demo'
+    p.setdefault('files',[]);p.setdefault('messages',[])
     if expected!=p['revision']:raise UserError('当前页面不是最新版本，请刷新后重试。',409)
-    if action=='material':
+    if action=='import':
+        result=extract_upload(data);fid=secrets.token_hex(8)
+        rel=str(data.get('relative_path') or result['name']).replace('\\','/')
+        if len(rel)>500 or any(x in ('..','') for x in rel.split('/')) or ':' in rel:raise UserError('文件路径无效')
+        result.update(id=fid,path=rel,at=now(),original=True)
+        result['display_name']=re.sub(r'\.(md|txt)$','.docx',result['name'],flags=re.I)
+        p['files'].append(result);p['events'].append({'at':now(),'text':'导入文件：'+result['name']})
+        with connect() as c:
+            blob=base64.b64decode(data['content']);body=blob if result['name'].lower().endswith('.docx') else word_document(result['text'])
+            store(p,expected,c);c.execute('INSERT INTO imported_files VALUES(?,?,?,?)',(fid,pid,result['name'],blob))
+            c.execute('INSERT INTO office_documents VALUES(?,?,?,?,?)',(pid,'file_'+fid,0,body,hashlib.sha256(result['text'].encode()).hexdigest()))
+        return p
+    elif action=='wordreplace':
+        name=str(data.get('name',''))
+        if not name.lower().endswith('.docx'):raise UserError('请导入 .docx 格式的修订稿')
+        result=extract_upload(data);slot=data.get('slot');body=base64.b64decode(data['content'])
+        if slot=='material':
+            if p['draft'] or p['versions']:raise UserError('已有协议，请使用业务变更流程提交材料')
+            p.update(material=result['text'],source_name=name,analysis=None,answers={},stage=0);p.pop('confirmed_by',None);p.pop('confirmed_at',None)
+        elif slot in ('service','privacy'):
+            d=p.get('draft')
+            if not d or d.get('archived_as'):raise UserError('当前没有可替换的审阅稿')
+            d[slot]=result['text'];d['hash']=doc_hash(d);d['edited_at']=now()
+        elif isinstance(slot,str) and re.fullmatch('file_[a-f0-9]+',slot):
+            f=next((f for f in p['files'] if f['id']==slot[5:]),None)
+            if not f:raise UserError('文档不存在',404)
+            f['text']=result['text'];f['edited_at']=now()
+        else:raise UserError('文档类型无效')
+        p['events'].append({'at':now(),'text':'导入 Word 修订稿：'+name})
+        with connect() as c:
+            store(p,expected,c)
+            c.execute('INSERT OR REPLACE INTO office_documents VALUES(?,?,?,?,?)',(pid,slot,0,body,hashlib.sha256(result['text'].encode()).hexdigest()))
+        return p
+    elif action=='fileedit':
+        f=next((f for f in p['files'] if f['id']==data.get('id')),None)
+        if not f:raise UserError('文件不存在',404)
+        f['text']=text(data.get('text'),'文档正文',120000);f['edited_at']=now();event='保存工作区文档副本'
+    elif action=='chat':
+        message=text(data.get('message'),'消息',8000);doc=data.get('document','material')
+        if doc not in ('material','service','privacy'):raise UserError('对话文档无效')
+        d=p.get('draft') or {};selection=str(data.get('selection') or '')[:12000]
+        current=p['material'] if doc=='material' else d.get(doc,'')
+        if selection and selection not in current:raise UserError('所选文本已发生变化，请保存后重新选择',409)
+        history=[{'role':m['role'],'content':m['content']} for m in p['messages'][-12:]]
+        if demo:
+            result={'answer':'当前为示例项目，未调用实时模型。可以在上方执行材料分析、确认、起草与修订流程。自由提问和选文修改请在连接模型后建立真实项目。','proposal':None}
+        else:
+            result=call_model('chat',{'message':message,'document':doc,'current_document':current,'selection':selection,'material':p['material'],'analysis':p['analysis'],'answers':p['answers'],'editable':bool(doc!='material' and d and not d.get('archived_as')),'history':history})
+        proposal=result.get('proposal')
+        if proposal:
+            target=proposal['document']
+            if doc=='material' or target!=doc or d.get('archived_as') or not d or d.get(target,'').count(proposal['before'])!=1:raise UserError('AI建议无法唯一对应当前草稿，未改动正文，请缩小选文后重试',502,'proposal_unanchored')
+            proposal.update(hash=d['hash'],applied=False)
+        p['messages'] += [{'id':secrets.token_hex(8),'role':'user','content':message,'at':now(),'document':doc,'selection':selection},{'id':secrets.token_hex(8),'role':'assistant','content':result['answer'],'proposal':proposal,'at':now(),'provenance':result.get('provenance',{'kind':'demo'})}]
+        event='完成一次文档对话'
+    elif action=='applyproposal':
+        m=next((m for m in p['messages'] if m['id']==data.get('id')),None)
+        prop=m.get('proposal') if m else None;d=p.get('draft')
+        if not prop or not d or prop.get('applied') or d.get('archived_as'):raise UserError('没有可应用的修改建议')
+        if prop['hash']!=doc_hash(d):raise UserError('正文已改变，请重新生成建议',409)
+        key=prop['document']
+        if d[key].count(prop['before'])!=1:raise UserError('原文无法唯一定位',409)
+        d[key]=d[key].replace(prop['before'],prop['after'],1);d['hash']=doc_hash(d);prop['applied']=True;d['edited_at']=now();event='法务采纳AI修改建议'
+    elif action=='material':
         if p['draft'] or p['versions']:raise UserError('已有协议，请在业务变更中提交新材料。')
         p['material']=text(data.get('material'),'业务材料');p['source_name']=str(data.get('source_name','手动输入'))[:150]
         p['analysis']=None;p['answers']={};p.pop('confirmed_by',None);p.pop('confirmed_at',None);p['stage']=0;event='保存业务材料'
@@ -170,12 +253,14 @@ def perform(pid,action,data):
         if not p['reviews']:
             due=(date.today()+timedelta(days=30)).isoformat()
             p['reviews']=[{'id':secrets.token_hex(4),'topic':t,'question':q,'owner':o,'due':due,'history':[]} for t,q,o in [
-                ('模型与第三方','核实模型清单、接收方、部署地、留存及训练策略是否变化。','研发 / 法务'),
+                ('供应商与数据流','核实实际供应商、接收方、处理地点、留存及用途是否变化；存在AI功能时核对模型清单。','研发 / 法务'),
                 ('域名与联系入口','确认服务域名、客服邮箱、投诉与注销入口仍准确可用。','产品 / 客服'),
-                ('数据与商业规则','确认个人信息用途、保留期限、素材许可及积分退款规则有无调整。','产品 / 法务')]]
+                ('数据与商业规则','确认个人信息用途、保留期限、内容授权、收费权益及退款规则有无调整。','产品 / 法务')]]
         p['events'].append({'at':now(),'text':f'归档法务定稿 v{n}'})
+        native={slot:native_document(pid,slot) for slot in ('service','privacy')}
         with connect() as c:
             store(p,expected,c);c.execute('INSERT INTO versions VALUES(?,?,?)',(pid,n,dumps(snap)))
+            for slot,body in native.items():c.execute('INSERT INTO office_documents VALUES(?,?,?,?,?)',(pid,slot,n,body,hashlib.sha256(d[slot].encode()).hexdigest()))
         return p
     elif action=='revise':
         if not p['versions']:raise UserError('请先完成 v1 定稿归档。')
@@ -192,7 +277,7 @@ def perform(pid,action,data):
                 doc=change_item['document']
                 if change_item['before'] not in d[doc]:raise UserError('基线的示例条款已经改变，需要真实模型分析，不能套用固定回放。')
                 d[doc]=d[doc].replace(change_item['before'],change_item['after'])
-        d['base_version']=latest;d['hash']=doc_hash(d);p['draft']=d;p['change_input']=change;p['change_confirmation']=confirmation;p['stage']=2
+        d['base_version']=latest;d['hash']=doc_hash(d);d['verified_diff']={doc:'\n'.join(unified_diff(snap['draft'][doc].splitlines(),d[doc].splitlines(),fromfile=f'v{latest}',tofile='候选稿',lineterm='')) for doc in ('service','privacy')};p['draft']=d;p['change_input']=change;p['change_confirmation']=confirmation;p['stage']=2
         event='根据业务变更生成候选修订'
     elif action=='review':
         item=next((x for x in p['reviews'] if x['id']==data.get('id')),None)
@@ -220,7 +305,7 @@ def extract_upload(data):
                 if b'<!DOCTYPE' in xml or b'<!ENTITY' in xml:raise UserError('文档结构不支持。')
                 root=ElementTree.fromstring(xml);ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
                 out='\n'.join(''.join(t.text or '' for t in p.findall('.//w:t',ns)) for p in root.findall('.//w:p',ns))
-        except (zipfile.BadZipFile,KeyError,ElementTree.ParseError):raise UserError('无法读取 Word 文件，请另存为 .docx 或粘贴正文。')
+        except (zipfile.BadZipFile,KeyError,ElementTree.ParseError,RuntimeError):raise UserError('无法读取 Word 文件，请检查是否加密，或另存为 .docx 后重试。')
     elif name.lower().endswith(('.txt','.md')):
         try:out=blob.decode('utf-8-sig')
         except UnicodeDecodeError:
@@ -228,6 +313,44 @@ def extract_upload(data):
             except UnicodeDecodeError:raise UserError('无法识别编码，请使用 UTF-8。')
     else:raise UserError('支持 .docx、.txt、.md；PDF 请复制正文后提交。')
     return {'name':name,'text':text(out,'文件正文'),'sha256':hashlib.sha256(blob).hexdigest()}
+
+EXECUTOR=ThreadPoolExecutor(max_workers=2,thread_name_prefix='agreement-job')
+def recover_jobs():
+    with connect() as c:
+        c.execute("UPDATE jobs SET status='failed',error='服务重启中断了任务，已保存文件保留，请重新发起',error_code='server_restarted',updated_at=? WHERE status IN ('queued','running')",(now(),))
+
+def job_public(row):
+    d=dict(row);payload=json.loads(d.pop('payload'));d['message']=payload.get('message','');d['progress']=json.loads(d['progress']) if d.get('progress') else None;return d
+
+def project_jobs(pid):
+    get_project(pid)
+    with connect() as c:return [job_public(r) for r in c.execute('SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 8',(pid,))]
+
+def run_job(jid):
+    JOB_LOCAL.id=jid
+    with connect() as c:
+        row=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+        c.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?",(now(),jid))
+    try:
+        perform(row['project_id'],row['action'],json.loads(row['payload']))
+        with connect() as c:c.execute("UPDATE jobs SET status='done',updated_at=? WHERE id=?",(now(),jid))
+    except Exception as e:
+        err=e if isinstance(e,UserError) else UserError('任务异常，已保存内容保留',500,'internal_error')
+        with connect() as c:c.execute("UPDATE jobs SET status='failed',updated_at=?,error=?,error_code=?,request_id=? WHERE id=?",(now(),str(err),err.code,err.request_id,jid))
+    finally:JOB_LOCAL.id=None
+
+def submit_job(pid,action,data):
+    if action not in ('analyze','draft','revise','chat'):raise UserError('该操作不是生成任务')
+    p=get_project(pid)
+    if data.get('revision')!=p['revision']:raise UserError('项目已更新，请刷新后重试',409)
+    if p['mode']=='live' and not CONFIG['api_key']:raise UserError('请先连接模型；已保存的材料保留。',503,'model_not_configured')
+    jid=secrets.token_hex(8)
+    try:
+        with connect() as c:c.execute('INSERT INTO jobs(id,project_id,action,payload,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',(jid,pid,action,dumps(data),'queued',now(),now()))
+    except sqlite3.IntegrityError:raise UserError('本项目已有任务正在运行',409,'job_active')
+    EXECUTOR.submit(run_job,jid)
+    return {'id':jid,'project_id':pid,'status':'queued','action':action}
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*a,**kw):super().__init__(*a,directory=str(ROOT/'public'),**kw)
@@ -240,6 +363,8 @@ class Handler(SimpleHTTPRequestHandler):
         body=dumps(v).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(body)))
         if cookie:self.send_header('Set-Cookie',cookie)
         self.end_headers();self.wfile.write(body)
+    def send_bytes(self,body,mime):
+        self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
     def authenticated(self):
         if not PASSWORD:return True
         cookie=SimpleCookie()
@@ -265,20 +390,33 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/session':return self.send_json({'authenticated':self.authenticated(),'login_required':bool(PASSWORD)})
             if path.startswith('/api/'):
                 self.guard()
-                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False})
+                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.1','office':{'provider':'local','wps_ready':False}})
                 if path=='/api/demo':return self.send_json(seed())
                 if path=='/api/projects':
                     with connect() as c:ps=[json.loads(r[0]) for r in c.execute('SELECT payload FROM projects ORDER BY rowid')]
-                    return self.send_json([{k:p[k] for k in ('id','name','mode','stage')} for p in ps])
+                    return self.send_json([{k:p[k] for k in ('id','name','mode','stage')} for p in ps if not p.get('internal_ui_test')])
+                m=re.fullmatch(r'/api/projects/([a-f0-9]+)/jobs',path)
+                if m:return self.send_json(project_jobs(m[1]))
+                m=re.fullmatch(r'/api/projects/([a-f0-9]+)/documents/([a-z0-9_]+)',path)
+                if m:
+                    from urllib.parse import parse_qs
+                    try:number=int(parse_qs(urlparse(self.path).query).get('version',['0'])[0])
+                    except ValueError:raise UserError('版本号无效')
+                    return self.send_bytes(native_document(m[1],m[2],number),'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                m=re.fullmatch(r'/api/projects/([a-f0-9]+)/files/([a-f0-9]+)',path)
+                if m:
+                    with connect() as c:r=c.execute('SELECT body FROM imported_files WHERE project_id=? AND id=?',(m[1],m[2])).fetchone()
+                    if not r:raise UserError('原文件不存在',404)
+                    return self.send_bytes(r['body'],'application/octet-stream')
                 m=re.fullmatch(r'/api/projects/([a-f0-9]+)/versions/(\d+)',path)
                 if m:return self.send_json(version(m[1],int(m[2])))
                 m=re.fullmatch(r'/api/projects/([a-f0-9]+)',path)
                 if m:return self.send_json(get_project(m[1]))
                 raise UserError('接口不存在。',404)
-            public_assets={'/assets/'+n for n in ('character-sheet.png','review-scene.png','privacy-scene.png','login-scene.png','workflow-scene.png')}
-            if path not in ('/','/index.html','/app.js','/style.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
+            public_assets={'/assets/'+n for n in ('character-sheet.png','review-scene.png','privacy-scene.png','login-scene.png','workflow-scene.png','companion-idle.webp','companion-still.png','companion-blink.gif')}
+            if path not in ('/','/index.html','/studio.js','/motion.js','/studio.css','/motion.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
             return super().do_GET()
-        except UserError as e:self.send_json({'error':str(e)},e.status)
+        except UserError as e:self.send_json({'error':str(e),'code':e.code,'request_id':e.request_id},e.status)
         except (BrokenPipeError,ConnectionResetError):pass
     def do_POST(self):
         try:
@@ -300,19 +438,25 @@ class Handler(SimpleHTTPRequestHandler):
             self.guard(True)
             if path=='/api/config':
                 if ORIGIN or self.client_address[0]!='127.0.0.1':raise UserError('线上配置请在服务器环境变量中设置。',403)
+                fmt=data.get('format','auto')
+                if fmt not in ('auto','json_object','json_schema','prompt'):raise UserError('输出模式无效')
+                CONFIG['format']=fmt
                 CONFIG['model']=text(data.get('model'),'模型名称',150)
                 if data.get('api_key'):CONFIG['api_key']=text(data['api_key'],'密钥',300)
                 return self.send_json({'ok':True,'ready':bool(CONFIG['api_key'])})
+            if path=='/api/export':return self.send_bytes(word_document(text(data.get('text'),'文档正文',120000)),'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
             if path=='/api/upload':return self.send_json(extract_upload(data))
             if path=='/api/projects':return self.send_json(create_project(data.get('name'),data.get('mode')))
+            m=re.fullmatch(r'/api/projects/([a-f0-9]+)/jobs/([a-z]+)',path)
+            if m:return self.send_json(submit_job(m[1],m[2],data),202)
             m=re.fullmatch(r'/api/projects/([a-f0-9]+)/([a-z]+)',path)
             if m:return self.send_json(perform(m[1],m[2],data))
             raise UserError('接口不存在。',404)
-        except UserError as e:self.send_json({'error':str(e)},e.status)
+        except UserError as e:self.send_json({'error':str(e),'code':e.code,'request_id':e.request_id},e.status)
         except (BrokenPipeError,ConnectionResetError):pass
         except Exception as e:
             print('Request failed:',type(e).__name__,flush=True);self.send_json({'error':'操作未完成，请刷新核对当前状态后重试。'},500)
 
 if __name__=='__main__':
     if HOST not in ('127.0.0.1','localhost') and (len(PASSWORD)<16 or not ORIGIN.startswith('https://')):raise SystemExit('Public binding requires APP_PASSWORD (16+ characters) and HTTPS PUBLIC_ORIGIN')
-    initialize();print(f'Local: http://127.0.0.1:{PORT}',flush=True);ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
+    initialize();recover_jobs();print(f'Local: http://127.0.0.1:{PORT}',flush=True);ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
