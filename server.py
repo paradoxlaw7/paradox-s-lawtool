@@ -23,10 +23,29 @@ DATA=Path(os.environ.get('DATA_DIR',str(ROOT/'data'))); DATA.mkdir(parents=True,
 DB=DATA/'workspace.sqlite3'
 HOST=os.environ.get('HOST','127.0.0.1'); PORT=int(os.environ.get('PORT','8765'))
 PASSWORD=os.environ.get('APP_PASSWORD',''); ORIGIN=os.environ.get('PUBLIC_ORIGIN','').rstrip('/')
+RENDER_HOST=os.environ.get('RENDER_EXTERNAL_HOSTNAME','').strip().lower().rstrip('.')
 CONFIG={'api_key':os.environ.get('SILICONFLOW_API_KEY',''),'model':os.environ.get('AI_MODEL','deepseek-ai/DeepSeek-V3.2'),'format':os.environ.get('AI_RESPONSE_FORMAT','auto'),'stream':os.environ.get('AI_STREAM','true').lower()=='true'}
 API_BASE='https://api.siliconflow.cn/v1'
 SESSIONS={}; LOGIN_ATTEMPTS={}; AI_LOCK=threading.BoundedSemaphore(2)
 JOB_LOCAL=threading.local()
+
+
+def canonical_redirect_target(host,target):
+    """Redirect only this service's Render alias to its configured HTTPS origin."""
+    if not ORIGIN or not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.onrender\.com',RENDER_HOST):return None
+    try:
+        canonical=urlparse(ORIGIN)
+        incoming=urlparse('//'+(host or ''))
+        if (canonical.scheme!='https' or not canonical.hostname or canonical.username is not None
+            or canonical.password is not None or canonical.path not in ('','/') or canonical.query or canonical.fragment):return None
+        if (incoming.hostname!=RENDER_HOST or incoming.port not in (None,443) or incoming.username is not None
+            or incoming.password is not None or incoming.path or incoming.query or incoming.fragment):return None
+        if canonical.hostname.lower().rstrip('.')==RENDER_HOST:return None
+    except ValueError:return None
+    parsed=urlparse(target)
+    path=parsed.path or '/'
+    if not path.startswith('/') or path.startswith(('//','/\\')):path='/'
+    return ORIGIN.rstrip('/')+path+('?' + parsed.query if parsed.query else '')
 
 
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -371,7 +390,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:cookie.load(self.headers.get('Cookie',''))
         except Exception:return False
         s=cookie.get('agreement_session');return bool(s and SESSIONS.get(s.value,0)>time.time())
-    def guard(self,mutation=False):
+    def guard_host(self,mutation=False):
         hosts={f'127.0.0.1:{PORT}',f'localhost:{PORT}'}
         if ORIGIN:hosts.add(urlparse(ORIGIN).netloc)
         if self.headers.get('Host') not in hosts:raise UserError('主机不被允许。',403)
@@ -380,17 +399,32 @@ class Handler(SimpleHTTPRequestHandler):
             if ORIGIN:origins.add(ORIGIN)
             if self.headers.get('Origin') and self.headers.get('Origin') not in origins:raise UserError('来源不被允许。',403)
             if self.headers.get('X-Workspace-Request')!='1':raise UserError('缺少请求校验。',403)
+    def guard(self,mutation=False):
+        self.guard_host(mutation)
         if not self.authenticated():raise UserError('请先输入工作台访问口令。',401)
+    def redirect_to_canonical(self):
+        if urlparse(self.path).path=='/healthz':return False
+        target=canonical_redirect_target(self.headers.get('Host'),self.path)
+        if not target:return False
+        self.send_response(302)
+        self.send_header('Location',target)
+        self.send_header('Content-Length','0')
+        self.end_headers()
+        return True
+    def do_HEAD(self):
+        if self.redirect_to_canonical():return
+        return super().do_HEAD()
     def do_GET(self):
         path=urlparse(self.path).path
         try:
+            if self.redirect_to_canonical():return
             if path=='/healthz':
                 with connect() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
                 return self.send_json({'status':'ok'})
             if path=='/api/session':return self.send_json({'authenticated':self.authenticated(),'login_required':bool(PASSWORD)})
             if path.startswith('/api/'):
                 self.guard()
-                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.5','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
+                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.5.1','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
                 if path=='/api/demo':return self.send_json(seed())
                 if path=='/api/projects':
                     with connect() as c:ps=[json.loads(r[0]) for r in c.execute('SELECT payload FROM projects ORDER BY rowid')]
@@ -427,7 +461,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(data,dict):raise UserError('请求格式错误。')
             path=urlparse(self.path).path
             if path=='/api/login':
-                if self.headers.get('X-Workspace-Request')!='1':raise UserError('请求不被允许。',403)
+                self.guard_host(True)
                 ip=self.client_address[0];recent=[t for t in LOGIN_ATTEMPTS.get(ip,[]) if time.time()-t<60];LOGIN_ATTEMPTS[ip]=recent
                 if len(recent)>=5:raise UserError('请一分钟后再试。',429)
                 if not isinstance(data.get('password'),str) or not hmac.compare_digest(data['password'].encode(),PASSWORD.encode()):recent.append(time.time());raise UserError('访问口令不正确。',401)
