@@ -1,5 +1,5 @@
 """Single-user agreement workspace. Python 3.11+, standard library only."""
-import base64, hashlib, hmac, io, json, os, re, secrets, sqlite3, threading, time, zipfile
+import base64, hashlib, hmac, io, json, os, re, secrets, sqlite3, sys, threading, time, zipfile
 import urllib.request, urllib.error
 from datetime import datetime, timedelta, timezone, date
 from http.cookies import SimpleCookie
@@ -11,6 +11,9 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from difflib import unified_diff
 import ai_gateway
+import harness_bridge
+import knowledge
+import agent_tasks
 from documents import word_document
 from errors import UserError
 
@@ -25,6 +28,7 @@ HOST=os.environ.get('HOST','127.0.0.1'); PORT=int(os.environ.get('PORT','8765'))
 PASSWORD=os.environ.get('APP_PASSWORD',''); ORIGIN=os.environ.get('PUBLIC_ORIGIN','').rstrip('/')
 RENDER_HOST=os.environ.get('RENDER_EXTERNAL_HOSTNAME','').strip().lower().rstrip('.')
 CONFIG={'api_key':os.environ.get('SILICONFLOW_API_KEY',''),'model':os.environ.get('AI_MODEL','deepseek-ai/DeepSeek-V3.2'),'format':os.environ.get('AI_RESPONSE_FORMAT','auto'),'stream':os.environ.get('AI_STREAM','true').lower()=='true'}
+HARNESS_TOKEN=os.environ.get('HARNESS_ACCESS_TOKEN','')
 API_BASE='https://api.siliconflow.cn/v1'
 SESSIONS={}; LOGIN_ATTEMPTS={}; AI_LOCK=threading.BoundedSemaphore(2)
 JOB_LOCAL=threading.local()
@@ -77,6 +81,8 @@ def initialize():
         CREATE TRIGGER IF NOT EXISTS immutable_versions_update BEFORE UPDATE ON versions BEGIN SELECT RAISE(ABORT,'immutable version'); END;
         CREATE TRIGGER IF NOT EXISTS immutable_versions_delete BEFORE DELETE ON versions BEGIN SELECT RAISE(ABORT,'immutable version'); END;''')
         if 'progress' not in [r['name'] for r in c.execute('PRAGMA table_info(jobs)')]:c.execute('ALTER TABLE jobs ADD COLUMN progress TEXT')
+        harness_bridge.initialize(c)
+        knowledge.initialize(c,now)
         if not c.execute('SELECT 1 FROM projects LIMIT 1').fetchone(): create_project('星幕漫剧工作台','demo',c)
 def create_project(name,mode,conn=None):
     name=text(name,'项目名称',80)
@@ -158,10 +164,26 @@ def call_model(stage,payload):
     return validate_result(output,stage)
 
 
-def perform(pid,action,data):
+def perform(pid,action,data,*,external_result=None,connection=None):
     p=get_project(pid);expected=data.get('revision');demo=p['mode']=='demo'
     p.setdefault('files',[]);p.setdefault('messages',[])
+    if external_result is not None:
+        if p.get('engine')!='harness' or action not in ('analyze','draft','revise'):raise UserError('外部结果仅能写入 Harness 专属生成任务。',403)
+        external_result=validate_result(external_result,action)
+    if p.get('engine')=='harness' and action in ('analyze','draft','revise','chat') and external_result is None:
+        raise UserError('此项目使用 Harness 账号模型；请在 Harness 中发起生成，工作台不另行调用模型。',409,'harness_required')
     if expected!=p['revision']:raise UserError('当前页面不是最新版本，请刷新后重试。',409)
+    if action=='harnesslink':
+        if demo:raise UserError('示例项目不接入真实模型；请使用真实项目。')
+        if data.get('confirmed') is not True:raise UserError('请在工作台明确确认授权此项目给 Harness。')
+        if len(HARNESS_TOKEN)<32:raise UserError('请先在服务器配置 HARNESS_ACCESS_TOKEN。',503)
+        with connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if c.execute("SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running')",(pid,)).fetchone():
+                raise UserError('请等待当前生成任务结束后再切换模型来源。',409)
+            p.update(engine='harness',harness_owner=hashlib.sha256(HARNESS_TOKEN.encode()).hexdigest())
+            p['events'].append({'at':now(),'text':'用户在工作台授权当前项目改用 Harness 会话模型'})
+            return store(p,expected,c)
     if action=='import':
         result=extract_upload(data);fid=secrets.token_hex(8)
         rel=str(data.get('relative_path') or result['name']).replace('\\','/')
@@ -233,7 +255,7 @@ def perform(pid,action,data):
         if p['draft']:raise UserError('已有审阅稿，请使用业务变更流程。')
         text(p['material'],'业务材料')
         if demo and p['material']!=seed()['material']:raise UserError('回放仅适用原始虚构材料，自定义材料请建立真实项目。')
-        p['analysis']=seed()['analysis'] if demo else call_model('analyze',{'material':p['material'],'source_name':p['source_name']})
+        p['analysis']=external_result if external_result is not None else seed()['analysis'] if demo else call_model('analyze',{'material':p['material'],'source_name':p['source_name']})
         p['answers']={};p.pop('confirmed_by',None);p.pop('confirmed_at',None);p['stage']=1;event='整理事实并生成业务追问'
     elif action=='answers':
         if not p['analysis'] or p['draft']:raise UserError('请先分析材料；初稿后的补充请走变更流程。')
@@ -245,7 +267,7 @@ def perform(pid,action,data):
         if p['draft']:raise UserError('初稿已存在，请编辑或进入业务变更。')
         if not p['analysis'] or not p.get('confirmed_by') or any(not p['answers'].get(q['id']) for q in p['analysis']['questions']):raise UserError('请先填写并保存全部业务回答。')
         if demo and p['answers']!=seed()['answers']:raise UserError('回放稿仅适用示例回答，自定义回答需要真实模型生成。')
-        p['draft']=seed()['draft'] if demo else call_model('draft',{'material':p['material'],'analysis':p['analysis'],'answers':p['answers']})
+        p['draft']=external_result if external_result is not None else seed()['draft'] if demo else call_model('draft',{'material':p['material'],'analysis':p['analysis'],'answers':p['answers']})
         p['draft']['base_version']=None;p['draft']['hash']=doc_hash(p['draft']);p['stage']=2;event='生成协议及法务审阅意见'
     elif action=='edit':
         if not p['draft'] or p['draft'].get('archived_as'):raise UserError('无可编辑草稿，已归档文本须走变更流程。')
@@ -288,7 +310,7 @@ def perform(pid,action,data):
         if demo and (change!=seed()['change_input'] or confirmation!=seed()['change_confirmation']):raise UserError('回放仅适用示例变更及确认材料，自定义变更请使用真实项目。')
         latest=p['versions'][-1]['number'];snap=version(pid,latest)
         if demo and latest!=1:raise UserError('示例只准备了 v1 → v2，进一步变更请建立真实项目。')
-        d=seed()['revision'] if demo else call_model('revise',{'baseline':snap,'change':change,'confirmation':confirmation})
+        d=external_result if external_result is not None else seed()['revision'] if demo else call_model('revise',{'baseline':snap,'change':change,'confirmation':confirmation})
         if demo:
             for doc in ('service','privacy'):
                 d[doc]=snap['draft'][doc]
@@ -308,7 +330,7 @@ def perform(pid,action,data):
         except (ValueError,TypeError):raise UserError('请选择今天之后的下次复核日期。')
         item['history'].append({'at':now(),'resolution':resolution,'old_due':item['due']});item['due']=nd.isoformat();event='记录复核结论：'+item['topic']
     else:raise UserError('未知操作。',404)
-    p['events'].append({'at':now(),'text':event});return store(p,expected)
+    p['events'].append({'at':now(),'text':event});return store(p,expected,connection)
 
 def extract_upload(data):
     name=text(data.get('name'),'文件名',200)
@@ -362,6 +384,7 @@ def submit_job(pid,action,data):
     if action not in ('analyze','draft','revise','chat'):raise UserError('该操作不是生成任务')
     p=get_project(pid)
     if data.get('revision')!=p['revision']:raise UserError('项目已更新，请刷新后重试',409)
+    if p.get('engine')=='harness':raise UserError('请在 Harness 使用当前账号模型生成；网页不另行调用模型。',409,'harness_required')
     if p['mode']=='live' and not CONFIG['api_key']:raise UserError('请先连接模型；已保存的材料保留。',503,'model_not_configured')
     jid=secrets.token_hex(8)
     try:
@@ -411,6 +434,12 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Content-Length','0')
         self.end_headers()
         return True
+    def harness_request(self,method,data=None):
+        self.guard_host(method=='POST')
+        owner=harness_bridge.authorize(HARNESS_TOKEN,self.headers.get('Authorization'))
+        result=harness_bridge.handle(sys.modules[__name__],method,self.path,data or {},owner)
+        if isinstance(result,tuple):return self.send_bytes(*result)
+        return self.send_json(result)
     def do_HEAD(self):
         if self.redirect_to_canonical():return
         return super().do_HEAD()
@@ -421,16 +450,21 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/healthz':
                 with connect() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
                 return self.send_json({'status':'ok'})
+            if path.startswith('/api/harness/'):return self.harness_request('GET')
             if path=='/api/session':return self.send_json({'authenticated':self.authenticated(),'login_required':bool(PASSWORD)})
             if path.startswith('/api/'):
                 self.guard()
-                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.5.1','connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
+                if path=='/api/status':return self.send_json({'ready':bool(CONFIG['api_key']),'provider':'硅基流动','model':CONFIG['model'],'local_config':not ORIGIN and self.client_address[0]=='127.0.0.1','scheduler':False,'format':CONFIG.get('format','auto'),'version':'2.8','agent_quality_enabled':True,'knowledge_enabled':True,'harness_enabled':len(HARNESS_TOKEN)>=32,'connection_scope':'server' if ORIGIN else 'local','office':{'provider':'local','wps_ready':False}})
+                if path=='/api/knowledge' or path.startswith('/api/knowledge/'):
+                    return self.send_json(knowledge.handle(sys.modules[__name__],'GET',self.path,{}))
                 if path=='/api/demo':return self.send_json(seed())
                 if path=='/api/projects':
                     with connect() as c:ps=[json.loads(r[0]) for r in c.execute('SELECT payload FROM projects ORDER BY rowid')]
                     return self.send_json([{k:p[k] for k in ('id','name','mode','stage')} for p in ps if not p.get('internal_ui_test')])
                 m=re.fullmatch(r'/api/projects/([a-f0-9]+)/jobs',path)
                 if m:return self.send_json(project_jobs(m[1]))
+                m=re.fullmatch(r'/api/projects/([a-f0-9]+)/agent(?:/([a-f0-9]+))?',path)
+                if m:return self.send_json(agent_tasks.web_handle(sys.modules[__name__],'GET',m[1],m[2]))
                 m=re.fullmatch(r'/api/projects/([a-f0-9]+)/documents/([a-z0-9_]+)',path)
                 if m:
                     from urllib.parse import parse_qs
@@ -448,7 +482,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if m:return self.send_json(get_project(m[1]))
                 raise UserError('接口不存在。',404)
             public_assets={'/assets/'+n for n in ('character-sheet.png','review-scene.png','privacy-scene.png','login-scene.png','workflow-scene.png','companion-idle.webp','companion-still.png','companion-blink.gif','entrance-v1.mp4','entrance-start.png','entrance-poster.png')}
-            if path not in ('/','/index.html','/studio.js','/motion.js','/studio.css','/motion.css','/intro.js','/intro.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
+            if path not in ('/','/index.html','/studio.js','/agent.js','/agent.css','/knowledge.js','/knowledge.css','/motion.js','/studio.css','/motion.css','/intro.js','/intro.css','/favicon.svg') and path not in public_assets:raise UserError('页面不存在。',404)
             return super().do_GET()
         except UserError as e:self.send_json({'error':str(e),'code':e.code,'request_id':e.request_id},e.status)
         except (BrokenPipeError,ConnectionResetError):pass
@@ -460,6 +494,7 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:raise UserError('请求不是有效 JSON。')
             if not isinstance(data,dict):raise UserError('请求格式错误。')
             path=urlparse(self.path).path
+            if path.startswith('/api/harness/'):return self.harness_request('POST',data)
             if path=='/api/login':
                 self.guard_host(True)
                 ip=self.client_address[0];recent=[t for t in LOGIN_ATTEMPTS.get(ip,[]) if time.time()-t<60];LOGIN_ATTEMPTS[ip]=recent
@@ -470,6 +505,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if ORIGIN.startswith('https:'):cookie+='; Secure'
                 return self.send_json({'ok':True},cookie=cookie)
             self.guard(True)
+            if path.startswith('/api/knowledge/'):
+                return self.send_json(knowledge.handle(sys.modules[__name__],'POST',self.path,data))
             if path=='/api/config':
                 if ORIGIN or self.client_address[0]!='127.0.0.1':raise UserError('线上配置请在服务器环境变量中设置。',403)
                 fmt=data.get('format','auto')
@@ -481,6 +518,8 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/export':return self.send_bytes(word_document(text(data.get('text'),'文档正文',120000)),'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
             if path=='/api/upload':return self.send_json(extract_upload(data))
             if path=='/api/projects':return self.send_json(create_project(data.get('name'),data.get('mode')))
+            m=re.fullmatch(r'/api/projects/([a-f0-9]+)/agent(?:/([a-f0-9]+)/(confirm|cancel))?',path)
+            if m:return self.send_json(agent_tasks.web_handle(sys.modules[__name__],'POST',m[1],m[2],m[3],data))
             m=re.fullmatch(r'/api/projects/([a-f0-9]+)/jobs/([a-z]+)',path)
             if m:return self.send_json(submit_job(m[1],m[2],data),202)
             m=re.fullmatch(r'/api/projects/([a-f0-9]+)/([a-z]+)',path)

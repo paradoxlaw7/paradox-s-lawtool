@@ -1,0 +1,68 @@
+// Controlled fixtures validate the product flow; no paid generation or legal-accuracy claim.
+const {chromium,request}=require('playwright');
+const assert=require('assert/strict');const fs=require('fs');const path=require('path');
+(async()=>{
+ const base=process.env.WORKBENCH_URL||'http://127.0.0.1:8774';
+ const client=await request.newContext({baseURL:base,extraHTTPHeaders:{Authorization:'Bearer '+'b'.repeat(40),'X-Workspace-Request':'1'}});
+ async function call(route,body){const r=body===undefined?await client.get(route):await client.post(route,{data:body});const v=await r.json();assert(r.ok(),JSON.stringify(v));return v;}
+ const unique='zqknowledgebrowserfixture'+Date.now();
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ const page=await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});
+ const errors=[],jobs=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/\/jobs\/(analyze|draft|revise|chat)$/.test(r.url()))jobs.push(r.url());});
+ try{
+  let {project:p}=await call('/api/harness/projects',{name:'知识库网页回归'});
+  ({project:p}=await call(`/api/harness/projects/${p.id}/material`,{revision:p.revision,material:fs.readFileSync(path.join(__dirname,'fixtures/追剧时光PRD.md'),'utf8')}));
+  const task=await call(`/api/harness/projects/${p.id}/prepare`,{revision:p.revision,kind:'analyze'});
+  assert.equal(task.knowledge_context.scenario,'streaming');assert(task.knowledge_context.results.length);
+  assert(!task.knowledge_context.results.some(i=>i.id==='law_gen_scope_20261021'));
+  const seed=JSON.parse(fs.readFileSync(path.join(__dirname,'../demo.json'),'utf8'));const analysis={...seed.analysis};delete analysis.provenance;
+  await call(`/api/harness/tasks/${task.task_id}/submit`,{stage:'analyze',result:analysis});
+  await page.goto(base+'/?project='+p.id);await page.locator('[data-action="kb-open"]').waitFor();
+  assert.equal(await page.locator('.flow-step').count(),6);
+  await page.locator('[data-action="kb-open"]').click();await page.locator('.kb-card').first().waitFor();
+  assert(await page.locator('.kb-caption img').isVisible());
+  await page.locator('#kb-query').fill('仿声和声音克隆需要什么授权');await page.locator('#kb-scenario').selectOption('ai_generation');
+  await page.locator('[data-action="kb-search"]').click();await page.waitForFunction(()=>document.querySelector('.kb-card')?.innerText.includes('声音')||document.querySelector('.kb-card')?.innerText.includes('深度合成'));
+  await page.locator('.kb-card').first().click();await page.locator('.kb-detail').waitFor();
+  assert((await page.locator('.kb-detail').innerText()).includes('来源与定位'));
+  assert.equal(await page.locator('.kb-detail a').getAttribute('target'),'_blank');
+  await page.locator('[data-action="kb-new"]').click();await page.locator('#kb-form').waitFor();
+  const wordResponse=await client.post('/api/export',{data:{text:'内部回归规则：核对邮箱变更的业务负责人和证据。<img src=x onerror=alert(1)>'}});
+  assert(wordResponse.ok());
+  await page.locator('#kb-file').setInputFiles({name:'审核规则.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:await wordResponse.body()});
+  await page.waitForFunction(()=>document.querySelector('#kb-content').value.includes('内部回归规则'));
+  await page.locator('#kb-title').fill(unique+' 邮箱变更规则');
+  await page.locator('#kb-applicability').fill('客服及隐私联系邮箱发生变化');
+  await page.locator('#kb-exclusions').fill('不推断邮箱已经更新');
+  await page.locator('#kb-publisher').fill('网页回归测试');
+  await page.locator('[data-action="kb-save"]').click();await page.locator('.kb-card').filter({hasText:unique}).waitFor();
+  let pending=(await call('/api/harness/knowledge/search',{query:unique})).results;
+  assert(!pending.some(i=>i.title.includes(unique)));
+  await page.locator('.kb-card').filter({hasText:unique}).click();
+  await page.locator('#kb-reviewer').fill('法务回归测试');await page.locator('#kb-note').fill('核对原件及适用范围，确认仅为测试规则。');
+  await page.locator('[data-decision="approve"]').click();
+  await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('人工勾选'));
+  await page.locator('#kb-confirmed').check();await page.locator('[data-decision="approve"]').click();
+  await page.waitForFunction(()=>!document.querySelector('#kb-reviewer'));
+  const found=(await call('/api/harness/knowledge/search',{query:unique})).results;
+  assert(found.some(i=>i.title.includes(unique)));
+  await page.locator('[data-tab="library"]').click();await page.locator('#kb-query').fill(unique);
+  await page.locator('[data-action="kb-search"]').click();await page.locator('.kb-card').filter({hasText:unique}).waitFor();
+  await page.locator('.kb-card').first().click();await page.locator('.kb-detail').waitFor();
+  assert.equal(await page.locator('.kb-copy img').count(),0);
+  await page.locator('#kb-reviewer').fill('法务回归测试');await page.locator('#kb-note').fill('测试完成，撤下测试规则');await page.locator('#kb-confirmed').check();
+  await page.locator('[data-decision="retire"]').click();await page.waitForFunction(()=>!document.querySelector('#kb-reviewer'));
+  assert(!(await call('/api/harness/knowledge/search',{query:unique})).results.some(i=>i.title.includes(unique)));
+  await page.locator('[data-tab="used"]').click();await page.locator('[data-frozen="1"]').first().waitFor();
+  assert((await page.locator('#kb-body').innerText()).includes('当时的参考资料'));
+  const dir=path.join(__dirname,'../test-results');fs.mkdirSync(dir,{recursive:true});
+  await page.screenshot({path:path.join(dir,'knowledge-workbench.png')});
+  await page.locator('[data-action="close"]').click();
+  assert.equal(await page.locator('.flow-step').count(),6);
+  const current=(await call(`/api/harness/projects/${p.id}`)).project;
+  assert.deepEqual(current.analysis.provenance.knowledge,task.knowledge_context);
+  assert.deepEqual(errors,[]);assert.equal(jobs.length,0);
+  const report={ok:true,wordExtraction:true,candidateHumanGate:true,retrieval:true,retirement:true,snapshotPreserved:true,scenarioRegression:true,pageErrors:errors,serverModelJobs:jobs.length};
+  fs.writeFileSync(path.join(dir,'knowledge-browser-check.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+ }finally{await browser.close();await client.dispose();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

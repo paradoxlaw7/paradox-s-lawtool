@@ -1,0 +1,32 @@
+const {chromium}=require('playwright');const fs=require('fs');const path=require('path');const assert=require('assert');
+(async()=>{
+const browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(15000);
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+page.on('console',msg=>{if(msg.type()==='error')console.log('Browser:',msg.text())});
+page.on('response',r=>{if(r.status()>=400)console.log('HTTP',r.status(),r.url())});
+await page.goto('http://127.0.0.1:8766');await page.locator('#project-select').waitFor();
+await page.locator('[data-action="new"]').click();await page.locator('#new-name').fill('追剧时光 · 导入回归');await page.locator('[data-action="create"]').click();
+await page.waitForFunction(()=>document.querySelector('#project-select')?.selectedOptions[0]?.textContent==='追剧时光 · 导入回归'&&!document.querySelector('#modal')?.open);
+await page.locator('#file-picker').setInputFiles(path.join(__dirname,'fixtures/追剧时光PRD.md'));
+await page.locator('[data-action="original"]').waitFor();
+const [original]=await Promise.all([page.waitForEvent('download').catch(async e=>{console.log('Download failure:',await page.locator('#toast').innerText(),errors);throw e}),page.locator('[data-action="original"]').click()]);
+assert.deepStrictEqual(fs.readFileSync(await original.path()),fs.readFileSync(path.join(__dirname,'fixtures/追剧时光PRD.md')));
+await page.locator('[data-action="use-material"]').first().click();await page.waitForFunction(()=>document.querySelector('.doc-title')?.textContent==='业务PRD.docx');
+assert((await page.locator('#rich-editor').innerText()).includes('十二、协议生成要求'));
+await page.reload();await page.locator('#rich-editor').waitFor();
+assert((await page.locator('#rich-editor').innerText()).includes('所有信息均不出境'));
+const [download]=await Promise.all([page.waitForEvent('download'),page.locator('[data-action="export-word"]').click()]);
+await download.saveAs(path.join(__dirname,'../test-results/追剧时光-导出校验.docx'));
+// Actual generated content editable using toolbar.
+await page.locator('#rich-editor').press('Control+End');await page.locator('#rich-editor').press('Enter');
+await page.locator('[data-format="bold"]').click();await page.locator('#rich-editor').pressSequentially('法务补充核实事项');
+await page.locator('[data-action="save"]').click();await page.waitForFunction(()=>document.querySelector('#save-label')?.textContent==='已保存');
+await page.reload();await page.locator('#rich-editor').waitFor();
+assert((await page.locator('#rich-editor strong,#rich-editor b').allTextContents()).join('').includes('法务补充核实事项'));
+await page.route('**/jobs/analyze',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'请先连接模型；已保存的材料保留。'})}));
+await page.locator('[data-action="analyze"]').click();await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('先连接模型'));
+assert((await page.locator('#rich-editor').innerText()).includes('十二、协议生成要求'));
+assert.deepStrictEqual(errors,[]);
+console.log(JSON.stringify({ok:true,flows:['full-PRD-import','original-byte-preservation','use-as-material','save-reload','docx-download','bold-edit-persistence','no-key-input-retained'],errors}));
+await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

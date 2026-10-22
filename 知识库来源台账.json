@@ -1,0 +1,108 @@
+{
+  "version": "2026-10-21",
+  "seed_entries": 15,
+  "official_pages": 7,
+  "sources": [
+    {
+      "url": "https://www.miit.gov.cn/zwgk/zcwj/flfg/art/2022/art_04a0f1fb5df244e39688fd5372623a8d.html",
+      "title": "个人信息保护法：告知、必要性与保存期限",
+      "publisher": "全国人大常委会；工信部公开文本",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_pipl_notice_20261021",
+        "law_pipl_vendor_20261021",
+        "rule_vendor_20261021",
+        "rule_retention_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.court.gov.cn/zixun/xiangqing/233181.html",
+      "title": "民法典：格式条款提示与效力",
+      "publisher": "全国人大；最高人民法院公开文本",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_civil_terms_20261021",
+        "law_civil_voice_20261021",
+        "rule_payment_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm",
+      "title": "生成式人工智能暂行办法：先判断服务范围",
+      "publisher": "国家网信办等七部门",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_gen_scope_20261021",
+        "rule_scope_20261021",
+        "rule_generation_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.cac.gov.cn/2022-12/11/c_1672221949354811.htm",
+      "title": "深度合成规定：人声编辑、单独同意与评估",
+      "publisher": "国家网信办、工信部、公安部",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_synthesis_voice_20261021",
+        "rule_voice_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.cac.gov.cn/2025-03/14/c_1743654684782215.htm",
+      "title": "生成合成内容标识：生成端与传播端分别核对",
+      "publisher": "国家网信办等四部门",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_ai_label_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2024/art_0aea188276a44f0baf940ab95ee00e0a.html",
+      "title": "消费者权益保护法实施条例：价格与自动续费",
+      "publisher": "国务院；市场监管总局公开文本",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_consumer_price_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://www.nrta.gov.cn/art/2026/7/31/art_113_73785.html",
+      "title": "微短剧发展管理办法：核对现行分类和播出要求",
+      "publisher": "国家广播电视总局",
+      "status": "official_page_read",
+      "checked_on": "2026-10-21",
+      "entry_ids": [
+        "law_shortdrama_20261021"
+      ],
+      "note": "保存主题摘编及来源元数据，不是完整网页存证；不代表持续法规监测。"
+    },
+    {
+      "url": "https://lf3-cdn-tos.draftstatic.com/obj/ies-hotsoon-draft/ipfun/platform_agreement.html",
+      "title": "巨量有戏平台协议",
+      "status": "pending_retrieval",
+      "attempted_on": "2026-10-21",
+      "entry_ids": [],
+      "note": "用户提供；本轮网页读取失败，未编造或入库。后续取得有权使用原件后整理。"
+    },
+    {
+      "url": "https://lf3-cdn-tos.draftstatic.com/obj/ies-hotsoon-draft/ipfun/privacy_policy.html",
+      "title": "巨量有戏隐私政策",
+      "status": "pending_retrieval",
+      "attempted_on": "2026-10-21",
+      "entry_ids": [],
+      "note": "用户提供；本轮网页读取失败，未编造或入库。后续取得有权使用原件后整理。"
+    }
+  ]
+}

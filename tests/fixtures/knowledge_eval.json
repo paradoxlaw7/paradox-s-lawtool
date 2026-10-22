@@ -1,0 +1,8 @@
+[
+ {"query":"新版本支持仿声，演员许可是否足够？","scenario":"ai_generation","expected_any":["law_civil_voice_20261021","rule_voice_20261021","law_synthesis_voice_20261021"]},
+ {"query":"更换SDK以后接收方和数据流要怎么披露？","scenario":"general","expected_any":["rule_vendor_20261021","law_pipl_vendor_20261021"]},
+ {"query":"用户买了一部短剧，版权到期后不能继续观看，该如何退费？","scenario":"streaming","expected_any":["rule_payment_20261021","law_civil_terms_20261021"],"forbidden":["law_gen_scope_20261021","rule_voice_20261021"]},
+ {"query":"删除历史之后备份里是否还保存观看记录？","scenario":"general","expected_any":["rule_retention_20261021","law_pipl_notice_20261021"]},
+ {"query":"导出文生视频以后水印和用户协议需要说明什么？","scenario":"ai_generation","expected_any":["law_ai_label_20261021"]},
+ {"query":"连续包月扣费以前是否要再提醒？","scenario":"streaming","expected_any":["law_consumer_price_20261021","rule_payment_20261021"]}
+]

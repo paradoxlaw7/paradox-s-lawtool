@@ -3,6 +3,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      HARNESS_ACCESS_TOKEN: ${HARNESS_ACCESS_TOKEN:-}
       SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY}
       AI_MODEL: ${AI_MODEL:-deepseek-ai/DeepSeek-V3.2}
       AI_RESPONSE_FORMAT: ${AI_RESPONSE_FORMAT:-auto}

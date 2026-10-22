@@ -73,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
             def __enter__(self):return self
             def __exit__(self,*args):pass
             def read(self,*args):return json.dumps({'choices':[{'message':{'content':json.dumps(s.seed()['analysis'],ensure_ascii=False)},'finish_reason':'stop'}],'usage':{'total_tokens':100}}).encode()
-        with patch.dict(s.CONFIG,{'api_key':'fictional-test-key','model':'test-model'}),patch.object(s.urllib.request,'urlopen',return_value=Response()) as http:
+        with patch.dict(s.CONFIG,{'api_key':'fictional-test-key','model':'test-model','stream':False}),patch.object(s.urllib.request,'urlopen',return_value=Response()) as http:
             result=s.call_model('analyze',{'material':'虚构测试'})
             request=http.call_args.args[0]
             self.assertEqual(request.full_url,'https://api.siliconflow.cn/v1/chat/completions')
